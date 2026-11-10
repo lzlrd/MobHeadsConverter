@@ -1,6 +1,6 @@
 # MobHeadsConverter
 
-Paper plugin that turns heads from Vanilla Tweaks' More Mob Heads into the matching heads from [Jodek's Mob Heads](https://modrinth.com/datapack/mob-heads), for servers that switched from one to the other.
+Paper plugin that turns heads from Vanilla Tweaks' More Mob Heads into the matching heads from [Jodek's Mob Heads](https://modrinth.com/datapack/mob-heads), and old player heads into the heads [Player Drops Head](https://modrinth.com/datapack/player-drops-head) drops, for servers that switched packs.
 
 A converted head is the head Mob Heads' loot table would drop today: same texture, name, note block sound and rarity colour. It stacks with new drops and counts for Mob Heads' collection advancements. A name given on an anvil is kept.
 
@@ -22,10 +22,20 @@ Everything but pickups is logged, for example `Converted 3 old heads in Steve's 
 - Vanilla Tweaks uses one face for the leatherworker, mason and nitwit villagers, and one for their zombie versions. The item name picks the profession. A placed one has no name and becomes the plain villager.
 - The rarity colour follows Mob Heads' current `mob_heads.rarity` score for that mob, as new drops do.
 
+## Player heads
+
+A player head with a lore line starting with "Killed by", such as one from an older player head pack or `/give @s player_head[profile={name:"Steve"},lore=["Killed by Alex"]]`, becomes the head Player Drops Head 3.7.1 drops:
+
+- the "Killed by" line goes; other lore lines stay
+- it's named after the player, as Player Drops Head names it, unless it already has a name
+- a name-only profile becomes the player's full profile with their current skin, looked up once in the background, so the head stops changing when they change skin; if the player can't be found, the name-only profile stays
+
+Placed player heads convert when broken and picked up.
+
 ## Install
 
-1. Install Mob Heads 5.3.1 and lib-5555ff on a Paper 26.3 server.
-2. Put `MobHeadsConverter-1.0.jar` from [Releases](https://github.com/lzlrd/MobHeadsConverter/releases) in `plugins/` and restart.
+1. Install Mob Heads 5.3.1 and lib-5555ff, and Player Drops Head 3.7.1 if you use it, on a Paper 26.3 server.
+2. Put `MobHeadsConverter-1.1.jar` from [Releases](https://github.com/lzlrd/MobHeadsConverter/releases) in `plugins/` and restart.
 
 There is nothing to configure. Leave it installed: chunks nobody has visited since the switch still hold old heads.
 
@@ -35,7 +45,7 @@ There is nothing to configure. Leave it installed: chunks nobody has visited sin
 ./gradlew build
 ```
 
-Needs JDK 25. Writes `build/libs/MobHeadsConverter-1.0.jar`.
+Needs JDK 25. Writes `build/libs/MobHeadsConverter-1.1.jar`.
 
 ## Regenerate the mapping
 

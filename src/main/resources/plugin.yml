@@ -2,6 +2,6 @@ name: MobHeadsConverter
 version: '${version}'
 main: by.ayoo.mobheadsconverter.MobHeadsConverter
 api-version: '26.3'
-description: Converts Vanilla Tweaks More Mob Heads heads into the matching heads from Jodek's Mob Heads.
+description: Converts Vanilla Tweaks More Mob Heads heads into the matching heads from Jodek's Mob Heads, and old player heads into Player Drops Head's.
 authors: [Ayooby]
 website: https://github.com/lzlrd/MobHeadsConverter

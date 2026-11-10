@@ -1,5 +1,6 @@
 package by.ayoo.mobheadsconverter;
 
+import com.destroystokyo.paper.profile.PlayerProfile;
 import com.destroystokyo.paper.profile.ProfileProperty;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -7,6 +8,7 @@ import com.google.gson.JsonParser;
 import io.papermc.paper.datacomponent.DataComponentTypes;
 import io.papermc.paper.datacomponent.item.BundleContents;
 import io.papermc.paper.datacomponent.item.ItemContainerContents;
+import io.papermc.paper.datacomponent.item.ItemLore;
 import io.papermc.paper.datacomponent.item.ResolvableProfile;
 import java.io.InputStreamReader;
 import java.io.Reader;
@@ -15,10 +17,19 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TranslatableComponent;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.flattener.ComponentFlattener;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
@@ -53,15 +64,28 @@ import org.bukkit.scoreboard.Score;
 /**
  * Turns heads from Vanilla Tweaks' More Mob Heads into the matching heads from Jodek's Mob Heads: same texture, name,
  * note block sound and rarity colour as a head Jodek's loot tables drop today, so converted heads stack with new ones
- * and count for Jodek's collection advancements. Heads are converted where they turn up: player inventories and ender
- * chests on join, containers when opened, items when picked up, and placed heads, item frames, armour stands and
- * dropped items when their chunk loads.
+ * and count for Jodek's collection advancements. Player heads with a "Killed by" lore line, from an older player head
+ * pack or given by command, become what Jodek's Player Drops Head drops: named after the player, without that line, and
+ * with the player's full profile. Heads are converted where they turn up: player inventories and ender chests on join,
+ * containers when opened, items when picked up, and placed heads, item frames, armour stands and dropped items when
+ * their chunk loads.
  */
 public final class MobHeadsConverter extends JavaPlugin implements Listener {
 	private static final Pattern TEXTURE_URL = Pattern.compile("textures\\.minecraft\\.net/texture/([0-9a-fA-F]+)");
 	private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
+	/** Plain text that shows a translated part by its fallback, which is how other packs write "Killed by" in English. */
+	private static final PlainTextComponentSerializer PLAIN_FALLBACK = PlainTextComponentSerializer.builder()
+		.flattener(ComponentFlattener.basic().toBuilder()
+			.mapper(TranslatableComponent.class, component -> component.fallback() != null ? component.fallback() : component.key())
+			.build())
+		.build();
+	private static final String KILLED_BY = "Killed by ";
 
 	private final Map<String, Mapping> heads = new HashMap<>();
+	/** Full profiles looked up for name-only player heads, by lower-case name or UUID. */
+	private final Map<String, PlayerProfile> profiles = new ConcurrentHashMap<>();
+	private final Set<String> lookingUp = ConcurrentHashMap.newKeySet();
+	private final Set<String> notFound = ConcurrentHashMap.newKeySet();
 
 	@Override
 	public void onEnable() {
@@ -82,7 +106,7 @@ public final class MobHeadsConverter extends JavaPlugin implements Listener {
 			}
 		for (Player player : getServer().getOnlinePlayers())
 			convertPlayer(player);
-		getLogger().info("Ready to convert " + heads.size() + " Vanilla Tweaks head textures");
+		getLogger().info("Ready to convert " + heads.size() + " Vanilla Tweaks head textures and old player heads");
 	}
 
 	@EventHandler(priority = EventPriority.MONITOR)
@@ -219,7 +243,7 @@ public final class MobHeadsConverter extends JavaPlugin implements Listener {
 	private ItemStack convertHead(ItemStack item) {
 		Mapping mapping = heads.get(textureHash(item.getData(DataComponentTypes.PROFILE)));
 		if (mapping == null)
-			return null;
+			return convertPlayerHead(item);
 		// Every item has a default item name; only a name set on the item itself is Vanilla Tweaks'.
 		Component oldName = item.isDataOverridden(DataComponentTypes.ITEM_NAME) ? item.getData(DataComponentTypes.ITEM_NAME) : null;
 		// Jodek uses a few of the same faces; without its Vanilla Tweaks name such a head may be one of Jodek's own.
@@ -233,6 +257,75 @@ public final class MobHeadsConverter extends JavaPlugin implements Listener {
 		if (renamed != null)
 			converted.setData(DataComponentTypes.CUSTOM_NAME, renamed);
 		return converted;
+	}
+
+	/**
+	 * Turns a player head with a "Killed by" lore line into the head Player Drops Head drops: the line goes, the head is
+	 * named after the player unless it already has a name, and a name-only profile becomes the player's full profile, so
+	 * the head keeps the skin it has now. Returns null if nothing changes, or while that profile is being looked up.
+	 */
+	private ItemStack convertPlayerHead(ItemStack item) {
+		ItemLore lore = item.getData(DataComponentTypes.LORE);
+		ResolvableProfile profile = item.getData(DataComponentTypes.PROFILE);
+		if (lore == null || profile == null || (profile.name() == null && profile.uuid() == null))
+			return null;
+		List<Component> kept = new ArrayList<>();
+		for (Component line : lore.lines())
+			if (!PLAIN_FALLBACK.serialize(line).startsWith(KILLED_BY))
+				kept.add(line);
+		if (kept.size() == lore.lines().size())
+			return null;
+		ResolvableProfile full = fullProfile(profile);
+		if (full == null)
+			return null;
+		String name = full.name() != null ? full.name() : profile.name();
+		if (name == null)
+			return null;
+		ItemStack converted = item.clone();
+		converted.setData(DataComponentTypes.PROFILE, full);
+		if (kept.isEmpty())
+			converted.resetData(DataComponentTypes.LORE);
+		else
+			converted.setData(DataComponentTypes.LORE, ItemLore.lore(kept));
+		// Keep a name the head already has, such as one given on an anvil.
+		if (!converted.hasData(DataComponentTypes.CUSTOM_NAME))
+			converted.setData(DataComponentTypes.CUSTOM_NAME, playerName(name, full.uuid() != null ? full.uuid() : profile.uuid()));
+		return converted;
+	}
+
+	/** The name Player Drops Head gives a head: the player's name as the game shows a player, with their hover card. */
+	private static Component playerName(String name, UUID id) {
+		Component text = Component.text(name).insertion(name).clickEvent(ClickEvent.suggestCommand("/tell " + name + " "));
+		return id == null ? text : text.hoverEvent(HoverEvent.showEntity(Key.key("player"), id, Component.text(name)));
+	}
+
+	/**
+	 * A head's profile with the player's skin in it. A name-only profile is looked up once in the background; until that
+	 * finishes this returns null, and afterwards the online players' heads are converted again. If the player can't be
+	 * found, the profile stays as it is.
+	 */
+	private ResolvableProfile fullProfile(ResolvableProfile profile) {
+		if (!profile.dynamic())
+			return profile;
+		String key = profile.uuid() != null ? profile.uuid().toString() : profile.name().toLowerCase(Locale.ROOT);
+		PlayerProfile found = profiles.get(key);
+		if (found != null)
+			return ResolvableProfile.resolvableProfile(found);
+		if (notFound.contains(key))
+			return profile;
+		if (lookingUp.add(key)) {
+			profile.resolve().whenComplete((result, error) -> {
+				if (error == null && result != null && result.hasTextures()) {
+					profiles.put(key, result);
+				} else {
+					notFound.add(key);
+					getLogger().info("No skin found for the player head of " + (profile.name() != null ? profile.name() : key) + ", so it keeps its name-only profile");
+				}
+				lookingUp.remove(key);
+				getServer().getScheduler().runTask(this, () -> getServer().getOnlinePlayers().forEach(this::convertPlayer));
+			});
+		}
+		return null;
 	}
 
 	private boolean convert(Skull skull) {
